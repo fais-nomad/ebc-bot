@@ -1,11 +1,13 @@
 print("🔧 Bot script loaded...")
 
+import os
+import threading
+from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler,
     ConversationHandler, ContextTypes, filters, PicklePersistence
 )
-import os
 
 # States
 SELECT_ACTION, SELECT_SERVICES, ASK_PEOPLE, ASK_PROFIT, UPDATE_CHOICE, UPDATE_INPUT = range(6)
@@ -24,7 +26,8 @@ PRICES = {
 EXCHANGE_RATE = 1.6
 ALL_SERVICES = ["pickup", "flight", "guide", "porter", "permit", "food"]
 
-# /start
+# Telegram bot handlers
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("DEBUG: /start triggered")
     keyboard = [
@@ -34,7 +37,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Welcome! What do you want to do?", reply_markup=InlineKeyboardMarkup(keyboard))
     return SELECT_ACTION
 
-# Handle start options
 async def handle_start_option(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -46,7 +48,6 @@ async def handle_start_option(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.message.reply_text("Select a service to update:", reply_markup=InlineKeyboardMarkup(buttons))
         return UPDATE_CHOICE
 
-# Handle which cost to update
 async def update_cost_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -54,7 +55,6 @@ async def update_cost_choice(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.message.reply_text(f"Enter new cost for {query.data} (in NPR):")
     return UPDATE_INPUT
 
-# Apply cost update
 async def apply_cost_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         new_price = int(update.message.text)
@@ -65,7 +65,6 @@ async def apply_cost_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Invalid input. Try again.")
     return ConversationHandler.END
 
-# Show service selection
 async def show_service_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     selected = set(context.user_data.get("selected_services", []))
     buttons = [[
@@ -84,7 +83,6 @@ async def show_service_selection(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("🛠 Select services:", reply_markup=markup)
     return SELECT_SERVICES
 
-# Handle service selection
 async def handle_service_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -106,7 +104,6 @@ async def handle_service_selection(update: Update, context: ContextTypes.DEFAULT
     context.user_data["selected_services"] = list(selected)
     return await show_service_selection(update, context)
 
-# Cost calculator
 async def calculate_cost(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         num_people = int(update.message.text)
@@ -162,25 +159,24 @@ async def calculate_cost(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_markdown(
             f"📝 *Everest Base Camp Trek Cost Estimate*\n"
             f"──────────────────────────────\n"
-            f"🔢 *Number of Persons:* {num_people}\n\n" +
-            "\n".join(breakdown) +
+            f"🔢 *Number of Persons:* {num_people}\n\n"
+            + "\n".join(breakdown) +
             f"\n\n💰 *Total Cost:* ₹{total_npr} NPR ≈ ₹{total_inr:.2f} INR\n"
             f"👤 *Per Person:* ₹{per_person_inr:.2f} INR",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return ASK_PROFIT
 
-    except:
+    except Exception as e:
+        print(f"ERROR in calculate_cost: {e}")
         await update.message.reply_text("❌ Invalid number. Try again.")
         return ASK_PEOPLE
 
-# Ask profit
 async def ask_profit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     await update.callback_query.message.reply_text("💸 Enter profit amount per person (INR):")
     return ASK_PROFIT
 
-# Apply profit
 async def apply_profit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         profit = float(update.message.text)
@@ -202,41 +198,85 @@ async def apply_profit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = (
             f"🧾 *Final Trek Summary with Profit*\n"
             f"──────────────────────────────\n"
-            f"🔢 *Number of Persons:* {num}\n\n" +
-            "\n".join(summary["breakdown"]) +
+            f"🔢 *Number of Persons:* {num}\n\n"
+            + "\n".join(summary["breakdown"]) +
             f"\n\n➕ *Profit/Person:* ₹{profit:.2f}\n"
             f"👤 *New Per Person Cost:* ₹{new_pp:.2f} INR\n"
             f"💰 *Total Cost with Profit:* ₹{new_total:.2f} INR"
         )
 
-        await update.message.reply_markdown(msg)
+        keyboard = [[InlineKeyboardButton("📄 Get Full Itinerary", callback_data="get_itinerary")]]
+        await update.message.reply_markdown(msg, reply_markup=InlineKeyboardMarkup(keyboard))
         return ConversationHandler.END
 
-    except:
+    except Exception as e:
+        print(f"ERROR in apply_profit: {e}")
         await update.message.reply_text("❌ Please enter a valid number.")
         return ASK_PROFIT
 
-# Main
-if __name__ == '__main__':
-    print("✅ Bot is starting...")
-    TOKEN = "7511879334:AAGdDBsUp24Hm2TT6G1OazbhR5-ogcAkIJ4"
-    persistence = PicklePersistence(filepath="ebc_bot_data.pkl")
+async def send_itinerary(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    # If you have a static file, send it here
+    try:
+        with open("itinerary_everest_base_camp.pdf", "rb") as pdf:
+            await query.message.reply_document(
+                document=pdf,
+                filename="Everest_Base_Camp_Itinerary.pdf",
+                caption="📄 Here is your Everest Base Camp itinerary."
+            )
+    except FileNotFoundError:
+        await query.message.reply_text("❌ Itinerary file not found.")
 
-    app = ApplicationBuilder().token(TOKEN).persistence(persistence).build()
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ Operation cancelled.")
+    return ConversationHandler.END
+
+# Flask webserver for Render port binding
+
+from flask import Flask
+app_web = Flask("web")
+
+@app_web.route("/")
+def home():
+    return "Everest Base Camp Bot is running!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app_web.run(host="0.0.0.0", port=port)
+
+# Main entrypoint
+
+if __name__ == "__main__":
+    import asyncio
+
+    print("✅ Bot is starting...")
+
+    persistence = PicklePersistence(filepath="ebc_bot_data.pkl")
+    app = ApplicationBuilder().token(os.getenv("BOT_TOKEN") or "7511879334:AAGdDBsUp24Hm2TT6G1OazbhR5-ogcAkIJ4")\
+        .persistence(persistence).build()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
             SELECT_ACTION: [CallbackQueryHandler(handle_start_option)],
-            SELECT_SERVICES: [CallbackQueryHandler(handle_service_selection)],
+            SELECT_SERVICES: [CallbackQueryHandler(handle_service_selection, pattern=r"^(toggle_.*|select_all|deselect_all|proceed)$")],
             ASK_PEOPLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, calculate_cost)],
             ASK_PROFIT: [MessageHandler(filters.TEXT & ~filters.COMMAND, apply_profit)],
             UPDATE_CHOICE: [CallbackQueryHandler(update_cost_choice)],
             UPDATE_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, apply_cost_update)],
         },
-        fallbacks=[]
+        fallbacks=[],
     )
 
     app.add_handler(conv_handler)
     app.add_handler(CallbackQueryHandler(ask_profit, pattern="^add_profit$"))
+    app.add_handler(CallbackQueryHandler(send_itinerary, pattern="^get_itinerary$"))
+
+    # Start Flask webserver in a separate thread for Render
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+
+    # Run the Telegram bot polling loop
     app.run_polling()
